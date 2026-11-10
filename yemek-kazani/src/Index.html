@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yemek kazanı kaydı</title>
+  <style>
+    :root {
+      --bg: #f6f4ef; --card: #fff; --ink: #1f2328; --muted: #6a6f76;
+      --line: #e3e0d8; --accent: #d9480f; --accent-ink: #fff; --ok: #2b8a3e; --err: #c92a2a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink);
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px;
+      display: grid; gap: 20px; grid-template-columns: 1fr; }
+    @media (min-width: 860px) { .wrap { grid-template-columns: 360px 1fr; align-items: start; }
+      .form-card { position: sticky; top: 20px; } }
+    h1 { font-size: 1.35rem; margin: 0 0 4px; }
+    h2 { font-size: 1.05rem; margin: 0 0 12px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+    .durum { font-size: .9rem; padding: 8px 10px; border-radius: 8px; margin: 10px 0 16px;
+      background: #fff4e6; color: #8a4b0b; }
+    .durum.acik { background: #ebfbee; color: var(--ok); }
+    label.lbl { display: block; font-weight: 600; margin: 14px 0 6px; font-size: .95rem; }
+    input[type=text] { width: 100%; font: inherit; padding: 11px 12px; border: 1px solid var(--line);
+      border-radius: 10px; background: #fff; }
+    input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+    .secim { display: flex; flex-wrap: wrap; gap: 8px; }
+    .secim button { font: inherit; font-weight: 600; min-width: 64px; padding: 10px 12px; cursor: pointer;
+      border: 2px solid var(--accent); color: var(--accent); background: #fff; border-radius: 10px;
+      transition: background .12s, color .12s; -webkit-tap-highlight-color: transparent; }
+    .secim button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); }
+    .gonder { margin-top: 20px; width: 100%; font: inherit; font-weight: 700; padding: 13px;
+      border: 0; border-radius: 10px; background: var(--ink); color: #fff; cursor: pointer; }
+    .gonder:disabled, .secim button:disabled, input:disabled { opacity: .45; cursor: not-allowed; }
+    .mesaj { margin-top: 12px; font-size: .92rem; min-height: 1.3em; }
+    .mesaj.ok { color: var(--ok); } .mesaj.err { color: var(--err); }
+    .not { font-size: .8rem; color: var(--muted); margin-top: 8px; }
+    .tablo-kap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+    td.ad { white-space: normal; font-weight: 600; }
+    .ozet td, .ozet th { text-align: center; }
+    .ozet th:first-child, .ozet td:first-child { text-align: left; }
+    .ozet tfoot td { font-weight: 700; border-top: 2px solid var(--ink); }
+    .bos { color: var(--muted); font-size: .92rem; padding: 10px 0; }
+    .sayac { color: var(--muted); font-weight: 400; font-size: .85rem; }
+    .yukleniyor { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card form-card">
+      <h1>Yemek kazanı kaydı</h1>
+      <div id="durum" class="durum yukleniyor">Yükleniyor…</div>
+      <form id="form" autocomplete="off">
+        <label class="lbl" for="ad">Ad soyad</label>
+        <input type="text" id="ad" maxlength="60" placeholder="Örn. Ayşe Yılmaz" disabled>
+
+        <span class="lbl">Günler</span>
+        <div class="secim" id="gunler" role="group" aria-label="Günler"></div>
+
+        <span class="lbl">Öğünler</span>
+        <div class="secim" id="ogunler" role="group" aria-label="Öğünler"></div>
+
+        <button type="submit" class="gonder" id="gonder" disabled>Gönder</button>
+        <div id="mesaj" class="mesaj" role="status"></div>
+        <div class="not">Aynı isimle tekrar gönderirseniz önceki kaydınız güncellenir.</div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Kayıtlar <span class="sayac" id="sayac"></span></h2>
+      <div class="tablo-kap">
+        <table>
+          <thead><tr><th>Ad soyad</th><th>Günler</th><th>Öğünler</th></tr></thead>
+          <tbody id="kayitlar"></tbody>
+        </table>
+      </div>
+      <div id="bos" class="bos" hidden>Henüz kayıt yok.</div>
+
+      <h2 style="margin-top:24px">Porsiyon özeti (gün × öğün)</h2>
+      <div class="tablo-kap">
+        <table class="ozet" id="ozet"></table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    var GUNLER = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum'];
+    var OGUNLER = ['Sabah', 'Öğle', 'Akşam'];
+    var acik = false, gonderiliyor = false;
+
+    function el(tag, text, cls) {
+      var e = document.createElement(tag);
+      if (text != null) e.textContent = text;
+      if (cls) e.className = cls;
+      return e;
+    }
+
+    function butonlar(kapId, liste) {
+      var kap = document.getElementById(kapId);
+      liste.forEach(function (ad) {
+        var b = el('button', ad);
+        b.type = 'button';
+        b.dataset.deger = ad;
+        b.setAttribute('aria-pressed', 'false');
+        b.disabled = true;
+        b.addEventListener('click', function () {
+          b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+        });
+        kap.appendChild(b);
+      });
+    }
+
+    function secilenler(kapId) {
+      return Array.prototype.slice.call(
+        document.querySelectorAll('#' + kapId + ' button[aria-pressed=true]')
+      ).map(function (b) { return b.dataset.deger; });
+    }
+
+    function kilitle() {
+      var kapali = !acik || gonderiliyor;
+      document.getElementById('ad').disabled = kapali;
+      document.querySelectorAll('.secim button').forEach(function (b) { b.disabled = kapali; });
+      document.getElementById('gonder').disabled = kapali;
+      document.getElementById('gonder').textContent = gonderiliyor ? 'Gönderiliyor…' : 'Gönder';
+    }
+
+    function mesaj(text, tur) {
+      var m = document.getElementById('mesaj');
+      m.textContent = text || '';
+      m.className = 'mesaj' + (tur ? ' ' + tur : '');
+    }
+
+    function ciz(v) {
+      acik = v.acik;
+      var d = document.getElementById('durum');
+      d.textContent = v.durum;
+      d.className = 'durum' + (v.acik ? ' acik' : '');
+      kilitle();
+
+      var tbody = document.getElementById('kayitlar');
+      tbody.innerHTML = '';
+      v.kayitlar.forEach(function (k) {
+        var tr = el('tr');
+        tr.appendChild(el('td', k.ad, 'ad'));
+        tr.appendChild(el('td', k.gunler.join(', ')));
+        tr.appendChild(el('td', k.ogunler.join(', ')));
+        tbody.appendChild(tr);
+      });
+      document.getElementById('bos').hidden = v.kayitlar.length > 0;
+      document.getElementById('sayac').textContent = v.kayitlar.length ? '(' + v.kayitlar.length + ' kişi)' : '';
+
+      var t = document.getElementById('ozet');
+      t.innerHTML = '';
+      var thead = el('thead'), hr = el('tr');
+      hr.appendChild(el('th', 'Gün'));
+      OGUNLER.forEach(function (o) { hr.appendChild(el('th', o)); });
+      hr.appendChild(el('th', 'Toplam'));
+      thead.appendChild(hr); t.appendChild(thead);
+      var tb = el('tbody'), sutun = {}, genel = 0;
+      GUNLER.forEach(function (g) {
+        var tr = el('tr'), satir = 0;
+        tr.appendChild(el('td', g));
+        OGUNLER.forEach(function (o) {
+          var n = v.ozet[g][o];
+          satir += n; sutun[o] = (sutun[o] || 0) + n;
+          tr.appendChild(el('td', String(n)));
+        });
+        genel += satir;
+        tr.appendChild(el('td', String(satir)));
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      var tf = el('tfoot'), fr = el('tr');
+      fr.appendChild(el('td', 'Toplam'));
+      OGUNLER.forEach(function (o) { fr.appendChild(el('td', String(sutun[o] || 0))); });
+      fr.appendChild(el('td', String(genel)));
+      tf.appendChild(fr); t.appendChild(tf);
+    }
+
+    function yenile() {
+      google.script.run
+        .withSuccessHandler(ciz)
+        .withFailureHandler(function (e) { mesaj('Veri alınamadı: ' + e.message, 'err'); })
+        .getVeri();
+    }
+
+    document.getElementById('form').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      if (!acik || gonderiliyor) return;
+      var veri = {
+        ad: document.getElementById('ad').value.trim(),
+        gunler: secilenler('gunler'),
+        ogunler: secilenler('ogunler')
+      };
+      if (!veri.ad) return mesaj('Lütfen ad soyad yazın.', 'err');
+      if (!veri.gunler.length) return mesaj('En az bir gün seçin.', 'err');
+      if (!veri.ogunler.length) return mesaj('En az bir öğün seçin.', 'err');
+      gonderiliyor = true; kilitle(); mesaj('');
+      google.script.run
+        .withSuccessHandler(function (v) {
+          gonderiliyor = false; ciz(v); mesaj(v.mesaj, 'ok');
+        })
+        .withFailureHandler(function (e) {
+          gonderiliyor = false; kilitle(); mesaj(e.message, 'err'); yenile();
+        })
+        .gonder(veri);
+    });
+
+    butonlar('gunler', GUNLER);
+    butonlar('ogunler', OGUNLER);
+    yenile();
+    setInterval(function () { if (!gonderiliyor) yenile(); }, 30000);
+  </script>
+</body>
+</html>
