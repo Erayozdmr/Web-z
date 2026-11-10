@@ -13,19 +13,21 @@ var SHEET_AYAR = 'Ayarlar';
 var TZ = 'Europe/Istanbul';
 var MAX_AD = 60;
 
-/** Script editöründe BİR KEZ elle çalıştırın: sayfaları kurar ve yetki ister. */
+var SHEET_OZET = 'Özet';
+
+/**
+ * Script editöründe elle çalıştırın (tekrar çalıştırmak güvenlidir):
+ * sayfaları kurar, biçimlendirir, saat dilimini İstanbul yapar.
+ */
 function kurulum() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.setSpreadsheetTimeZone(TZ); // Dosya → Ayarlar → Saat dilimi: İstanbul (GMT+3)
 
-  var kayit = ss.getSheetByName(SHEET_KAYIT) || ss.insertSheet(SHEET_KAYIT, 0);
+  var kayit = ss.getSheetByName(SHEET_KAYIT) || ss.insertSheet(SHEET_KAYIT);
   if (kayit.getLastRow() === 0) {
-    kayit.getRange(1, 1, 1, 4).setValues([['Zaman', 'Ad Soyad', 'Günler', 'Öğünler']])
-      .setFontWeight('bold');
-    kayit.setFrozenRows(1);
-    kayit.getRange('A:A').setNumberFormat('dd.mm.yyyy HH:mm:ss');
-    kayit.setColumnWidth(2, 200);
+    kayit.getRange(1, 1, 1, 4).setValues([['Zaman', 'Ad Soyad', 'Günler', 'Öğünler']]);
   }
+  kayitBicimle_(kayit);
 
   var ayar = ss.getSheetByName(SHEET_AYAR) || ss.insertSheet(SHEET_AYAR);
   if (!ayar.getRange('A1').getValue()) {
@@ -35,18 +37,161 @@ function kurulum() {
       ['Başlangıç', simdi],
       ['Bitiş', bitis]
     ]);
-    ayar.getRange('A1:A2').setFontWeight('bold');
-    ayar.getRange('B1:B2').setNumberFormat('dd.mm.yyyy HH:mm');
     ayar.getRange('A4').setValue('B1 ve B2 hücrelerine tarih ve saat girin (örn. 10.11.2026 18:00). Bu aralığın dışında form kilitlenir.');
-    ayar.setColumnWidth(1, 110);
-    ayar.setColumnWidth(2, 160);
   }
+  ayar.getRange('A1:A2').setFontWeight('bold');
+  ayar.getRange('B1:B2').setNumberFormat('dd.mm.yyyy HH:mm');
+  ayar.setColumnWidth(1, 110);
+  ayar.setColumnWidth(2, 160);
 
-  // Varsayılan boş "Sayfa1"/"Sheet1" varsa ve boşsa kaldır.
+  // Varsayılan boş "Sayfa1"/"Sheet1" varsa kaldır.
   ['Sayfa1', 'Sheet1'].forEach(function (ad) {
     var s = ss.getSheetByName(ad);
     if (s && s.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(s);
   });
+
+  var ozet = ozetYaz_(ss);
+  ss.setActiveSheet(ozet);
+  ss.moveActiveSheet(1);
+}
+
+/** E-Tablo açılınca üstte "Yemek kazanı" menüsü. */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Yemek kazanı')
+    .addItem('Özeti yenile', 'ozetiYenile')
+    .addItem('Kurulumu / biçimi yenile', 'kurulum')
+    .addToUi();
+}
+
+function ozetiYenile() {
+  ozetYaz_(SpreadsheetApp.getActiveSpreadsheet());
+}
+
+/** Kayıtlar veya Ayarlar elle değiştirilirse (ör. satır silme) özeti güncelle. */
+function onEdit(e) {
+  try {
+    var ad = e && e.range ? e.range.getSheet().getName() : '';
+    if (ad === SHEET_KAYIT || ad === SHEET_AYAR) ozetYaz_(e.source);
+  } catch (err) { /* sessizce geç */ }
+}
+
+function kayitBicimle_(sh) {
+  sh.setFrozenRows(1);
+  sh.getRange(1, 1, 1, 4).setValues([['Zaman', 'Ad Soyad', 'Günler', 'Öğünler']])
+    .setFontWeight('bold').setFontColor('#ffffff').setHorizontalAlignment('center');
+  sh.getRange('A:A').setNumberFormat('dd.mm.yyyy HH:mm').setHorizontalAlignment('center');
+  sh.setColumnWidth(1, 130);
+  sh.setColumnWidth(2, 200);
+  sh.setColumnWidth(3, 190);
+  sh.setColumnWidth(4, 160);
+  var bantlar = sh.getBandings();
+  for (var i = 0; i < bantlar.length; i++) bantlar[i].remove();
+  sh.getRange('A1:D').applyRowBanding(SpreadsheetApp.BandingTheme.ORANGE, true, false)
+    .setHeaderRowColor('#d9480f').setFirstRowColor('#ffffff').setSecondRowColor('#fff4e6');
+}
+
+/**
+ * "Özet" sayfasını baştan yazar: porsiyon tablosu (gün × öğün) ve
+ * kişi bazında ✓ tablosu. Her kayıtta ve elle düzenlemede çağrılır.
+ */
+function ozetYaz_(ss) {
+  var sh = ss.getSheetByName(SHEET_OZET) || ss.insertSheet(SHEET_OZET, 0);
+  var kayitlar = kayitlariOku_(ss);
+  var ozet = ozetHesapla_(kayitlar);
+  var pencere = kayitPenceresi_(ss);
+  var GENISLIK = 1 + GUNLER.length + OGUNLER.length + 1; // 10 sütun
+
+  sh.clear();
+  sh.clearConditionalFormatRules();
+  sh.setHiddenGridlines(true);
+
+  // Başlık
+  sh.getRange(1, 1).setValue('Yemek kazanı').setFontSize(18).setFontWeight('bold');
+  sh.getRange(2, 1).setValue(
+    'Kayıt: ' + (pencere.baslangicStr || '—') + ' → ' + (pencere.bitisStr || '—') +
+    '   ·   ' + kayitlar.length + ' kişi   ·   Güncellendi: ' + fmt_(new Date())
+  ).setFontColor('#6a6f76');
+
+  // Porsiyon tablosu
+  var r0 = 4;
+  sh.getRange(r0, 1).setValue('Porsiyonlar').setFontSize(13).setFontWeight('bold');
+  var porsiyon = [['Gün'].concat(OGUNLER, ['Toplam'])];
+  var sutunTop = OGUNLER.map(function () { return 0; });
+  GUNLER.forEach(function (g) {
+    var satir = [g], top = 0;
+    OGUNLER.forEach(function (o, j) {
+      var n = ozet[g][o];
+      satir.push(n); top += n; sutunTop[j] += n;
+    });
+    satir.push(top);
+    porsiyon.push(satir);
+  });
+  var genel = sutunTop.reduce(function (a, b) { return a + b; }, 0);
+  porsiyon.push(['Toplam'].concat(sutunTop, [genel]));
+  var pr = sh.getRange(r0 + 1, 1, porsiyon.length, porsiyon[0].length);
+  pr.setValues(porsiyon).setHorizontalAlignment('center').setFontSize(12)
+    .setBorder(true, true, true, true, true, true, '#e3e0d8', SpreadsheetApp.BorderStyle.SOLID);
+  sh.getRange(r0 + 1, 1, 1, porsiyon[0].length)
+    .setBackground('#1f2328').setFontColor('#ffffff').setFontWeight('bold');
+  sh.getRange(r0 + 2, 1, GUNLER.length, 1).setFontWeight('bold').setBackground('#f6f4ef');
+  sh.getRange(r0 + 1 + porsiyon.length - 1, 1, 1, porsiyon[0].length)
+    .setFontWeight('bold').setBackground('#fff4e6');
+  sh.getRange(r0 + 2, porsiyon[0].length, GUNLER.length, 1)
+    .setFontWeight('bold').setBackground('#fff4e6');
+  var hucreler = sh.getRange(r0 + 2, 2, GUNLER.length, OGUNLER.length);
+
+  // Kişi tablosu
+  var k0 = r0 + porsiyon.length + 3;
+  sh.getRange(k0, 1).setValue('Kişiler (' + kayitlar.length + ')').setFontSize(13).setFontWeight('bold');
+  var baslik = ['Ad Soyad'].concat(GUNLER, OGUNLER, ['Porsiyon']);
+  var kisi = [baslik];
+  kayitlar
+    .slice()
+    .sort(function (a, b) { return a.ad.localeCompare(b.ad, 'tr'); })
+    .forEach(function (k) {
+      var satir = [k.ad];
+      GUNLER.forEach(function (g) { satir.push(k.gunler.indexOf(g) >= 0 ? '✓' : ''); });
+      OGUNLER.forEach(function (o) { satir.push(k.ogunler.indexOf(o) >= 0 ? '✓' : ''); });
+      satir.push(k.gunler.length * k.ogunler.length);
+      kisi.push(satir);
+    });
+  var kr = sh.getRange(k0 + 1, 1, kisi.length, baslik.length);
+  kr.setValues(kisi).setHorizontalAlignment('center').setFontSize(11)
+    .setBorder(true, true, true, true, true, true, '#e3e0d8', SpreadsheetApp.BorderStyle.SOLID);
+  sh.getRange(k0 + 1, 1, kisi.length, 1).setHorizontalAlignment('left');
+  sh.getRange(k0 + 1, 1, 1, baslik.length)
+    .setBackground('#1f2328').setFontColor('#ffffff').setFontWeight('bold');
+  // Gün ve öğün gruplarını ayıran ince çizgiler
+  sh.getRange(k0 + 1, 2 + GUNLER.length, kisi.length, 1)
+    .setBorder(null, true, null, null, null, null, '#1f2328', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  sh.getRange(k0 + 1, 2, kisi.length, 1)
+    .setBorder(null, true, null, null, null, null, '#1f2328', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  sh.getRange(k0 + 1, baslik.length, kisi.length, 1)
+    .setBorder(null, true, null, null, null, null, '#1f2328', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  var kurallar = [
+    SpreadsheetApp.newConditionalFormatRule()
+      .setRanges([hucreler])
+      .setGradientMinpointWithValue('#ffffff', SpreadsheetApp.InterpolationType.NUMBER, '0')
+      .setGradientMaxpoint('#f08c4a')
+      .build()
+  ];
+  if (kisi.length > 1) {
+    kurallar.push(SpreadsheetApp.newConditionalFormatRule()
+      .setRanges([sh.getRange(k0 + 2, 2, kisi.length - 1, GUNLER.length + OGUNLER.length)])
+      .whenTextEqualTo('✓')
+      .setBackground('#d3f9d8').setFontColor('#2b8a3e').setBold(true)
+      .build());
+  } else {
+    sh.getRange(k0 + 2, 1).setValue('Henüz kayıt yok.').setFontColor('#6a6f76');
+  }
+  sh.setConditionalFormatRules(kurallar);
+
+  sh.setColumnWidth(1, 190);
+  for (var c = 2; c <= GENISLIK; c++) sh.setColumnWidth(c, 64);
+  sh.setColumnWidth(GENISLIK, 80);
+  sh.setFrozenRows(0);
+  return sh;
 }
 
 function doGet() {
@@ -115,6 +260,7 @@ function gonder(form) {
       sheet.appendRow(satir);
     }
     SpreadsheetApp.flush();
+    try { ozetYaz_(ss); } catch (err) { console.error(err); }
   } finally {
     lock.releaseLock();
   }
